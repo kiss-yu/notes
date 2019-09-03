@@ -61,6 +61,8 @@ public class ApiJsonParamResolver extends RequestResponseBodyMethodProcessor imp
      */
     private final Boolean globalSwitch;
 
+    private final static String ROOT_JSON_KEY = "root-json-key";
+
     public ApiJsonParamResolver(List<HttpMessageConverter<?>> converters, List<HandlerMethodArgumentResolver> argumentResolvers) {
         this(converters, argumentResolvers, false);
     }
@@ -126,6 +128,8 @@ public class ApiJsonParamResolver extends RequestResponseBodyMethodProcessor imp
                         log.warn("无法解析复杂类型 value={},class={}", entry.getValue(), entry.getValue().getClass());
                     }
                 }
+                // 保留一份原始的json
+                paramMap.put(ROOT_JSON_KEY, new String[]{JSON.toJSONString(data)});
                 ServletWebRequest servletWebRequest = new ServletWebRequest(new IHttpServletRequest(httpServletRequest));
                 servletWebRequest.getParameterMap().putAll(paramMap);
                 cache.set(servletWebRequest);
@@ -137,7 +141,8 @@ public class ApiJsonParamResolver extends RequestResponseBodyMethodProcessor imp
                 String attributeJson;
                 // 一级ModelAttribute时直接将整个json放入body
                 if (StrUtil.isBlank(attribute.value())) {
-                    attributeJson = JSON.toJSONString(webRequest.getParameterMap());
+                    String[] data = webRequest.getParameterMap().get(ROOT_JSON_KEY);
+                    attributeJson = data == null ? null : data[0];
                 }
                 // 二级ModelAttribute（最多只能出现两级），在上面放到ParameterMap的json字符串拿出
                 else {
