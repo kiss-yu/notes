@@ -10,18 +10,22 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.BeanFactoryUtils;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
+import org.springframework.core.annotation.Order;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.format.FormatterRegistry;
+import org.springframework.format.support.FormattingConversionService;
 import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
-import org.springframework.web.servlet.config.annotation.WebMvcConfigurationSupport;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerAdapter;
 
 import javax.annotation.Resource;
@@ -31,15 +35,25 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 
 
 /**
  * @author 11723
  */
 @Slf4j
-@Configuration
 @ConfigurationProperties(prefix = "api.json")
-public class SpringMvcConfig extends WebMvcConfigurationSupport implements InitializingBean {
+@Configuration(value = "rootSpringMvcConfig")
+public class SpringMvcConfig implements WebMvcConfigurer, InitializingBean {
+
+    @Resource(name = "requestMappingHandlerAdapter")
+    private RequestMappingHandlerAdapter adapter;
+
+    @Resource
+    private ApplicationContext applicationContext;
+
+    @Resource(name = "mvcConversionService")
+    private FormattingConversionService formattingConversionService;
 
     /**
      * 默认日期时间格式
@@ -59,40 +73,13 @@ public class SpringMvcConfig extends WebMvcConfigurationSupport implements Initi
     private Boolean jsonFormat = false;
 
     private ApiJsonParamResolver apiJsonParamResolver;
-    private RequestMappingHandlerAdapter adapter;
 
-
-    @Resource
-    private ApplicationContext applicationContext;
 
     @Override
-    protected void addInterceptors(InterceptorRegistry registry) {
+    public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(apiJsonParamResolver());
     }
 
-
-    /**
-     * <p>
-     * <h3>作者 keray</h3>
-     * <h3>时间： 2019/9/3 14:49</h3>
-     * 注入localDateTime系列支持model
-     * </p>
-     *
-     * @param
-     * @return <p> {@link JavaTimeModule} </p>
-     * @throws
-     */
-    @Bean
-    public JavaTimeModule javaModule() {
-        JavaTimeModule javaTimeModule = new JavaTimeModule();
-        javaTimeModule.addSerializer(LocalDateTime.class, new com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_TIME_FORMAT)));
-        javaTimeModule.addSerializer(LocalDate.class, new com.fasterxml.jackson.datatype.jsr310.ser.LocalDateSerializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_FORMAT)));
-        javaTimeModule.addSerializer(LocalTime.class, new com.fasterxml.jackson.datatype.jsr310.ser.LocalTimeSerializer(DateTimeFormatter.ofPattern(DEFAULT_TIME_FORMAT)));
-        javaTimeModule.addDeserializer(LocalDateTime.class, new com.fasterxml.jackson.datatype.jsr310.deser.LocalDateTimeDeserializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_TIME_FORMAT)));
-        javaTimeModule.addDeserializer(LocalDate.class, new com.fasterxml.jackson.datatype.jsr310.deser.LocalDateDeserializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_FORMAT)));
-        javaTimeModule.addDeserializer(LocalTime.class, new com.fasterxml.jackson.datatype.jsr310.deser.LocalTimeDeserializer(DateTimeFormatter.ofPattern(DEFAULT_TIME_FORMAT)));
-        return javaTimeModule;
-    }
 
     /**
      * <p>
@@ -114,7 +101,17 @@ public class SpringMvcConfig extends WebMvcConfigurationSupport implements Initi
         } else {
             resolvers.addAll(adapter.getArgumentResolvers());
         }
-        requestMappingHandlerAdapter().setArgumentResolvers(resolvers);
+        adapter.setArgumentResolvers(resolvers);
+    }
+
+
+    private ApiJsonParamResolver apiJsonParamResolver() {
+        objectMapper();
+        if (apiJsonParamResolver != null) {
+            return apiJsonParamResolver;
+        }
+        apiJsonParamResolver = new ApiJsonParamResolver(adapter.getMessageConverters(), adapter.getArgumentResolvers(), jsonFormat);
+        return apiJsonParamResolver;
     }
 
     /**
@@ -125,20 +122,22 @@ public class SpringMvcConfig extends WebMvcConfigurationSupport implements Initi
      * </p>
      *
      * @param
-     * @return <p> {@link List<HttpMessageConverter<?>>} </p>
+     * @return <p> {@link List <  HttpMessageConverter  <?>>} </p>
      * @throws
      */
-    private List<HttpMessageConverter<?>> objectMapper() {
+    private void objectMapper() {
         HttpMessageConverter co = null;
         for (HttpMessageConverter c : adapter.getMessageConverters()) {
             if (c instanceof MappingJackson2HttpMessageConverter) {
                 co = c;
             }
         }
+
         // 构建支持LocalDatetime的ObjectMapper
+        Map<String, Module> map = BeanFactoryUtils.beansOfTypeIncludingAncestors(applicationContext, Module.class);
+        map.put("javaModule", javaModule());
         Jackson2ObjectMapperBuilder jackson2ObjectMapperBuilder = new Jackson2ObjectMapperBuilder().modules(
-                BeanFactoryUtils.beansOfTypeIncludingAncestors(applicationContext, Module.class)
-                        .values().toArray(new Module[0])
+                map.values().toArray(new Module[0])
         );
         ObjectMapper objectMapper = jackson2ObjectMapperBuilder.build();
         objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -148,7 +147,28 @@ public class SpringMvcConfig extends WebMvcConfigurationSupport implements Initi
         adapter.getMessageConverters().remove(co);
         // 新增支持localDatetime的MappingJackson2HttpMessageConverter
         adapter.getMessageConverters().add(new MappingJackson2HttpMessageConverter(objectMapper));
-        return adapter.getMessageConverters();
+    }
+
+    /**
+     * <p>
+     * <h3>作者 keray</h3>
+     * <h3>时间： 2019/9/3 14:49</h3>
+     * 注入localDateTime系列支持model
+     * </p>
+     *
+     * @param
+     * @return <p> {@link JavaTimeModule} </p>
+     * @throws
+     */
+    private JavaTimeModule javaModule() {
+        JavaTimeModule javaTimeModule = new JavaTimeModule();
+        javaTimeModule.addSerializer(LocalDateTime.class, new com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_TIME_FORMAT)));
+        javaTimeModule.addSerializer(LocalDate.class, new com.fasterxml.jackson.datatype.jsr310.ser.LocalDateSerializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_FORMAT)));
+        javaTimeModule.addSerializer(LocalTime.class, new com.fasterxml.jackson.datatype.jsr310.ser.LocalTimeSerializer(DateTimeFormatter.ofPattern(DEFAULT_TIME_FORMAT)));
+        javaTimeModule.addDeserializer(LocalDateTime.class, new com.fasterxml.jackson.datatype.jsr310.deser.LocalDateTimeDeserializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_TIME_FORMAT)));
+        javaTimeModule.addDeserializer(LocalDate.class, new com.fasterxml.jackson.datatype.jsr310.deser.LocalDateDeserializer(DateTimeFormatter.ofPattern(DEFAULT_DATE_FORMAT)));
+        javaTimeModule.addDeserializer(LocalTime.class, new com.fasterxml.jackson.datatype.jsr310.deser.LocalTimeDeserializer(DateTimeFormatter.ofPattern(DEFAULT_TIME_FORMAT)));
+        return javaTimeModule;
     }
 
     /**
@@ -157,54 +177,36 @@ public class SpringMvcConfig extends WebMvcConfigurationSupport implements Initi
      * <h3>时间： 2019/9/3 14:53</h3>
      * 添加接口方法参数里的LocalDatetime支持 参数必须使用@RequestParam注解
      * </p>
-     *
-     * @param registry
-     * @return <p> {@link} </p>
-     * @throws
      */
-    @Override
-    protected void addFormatters(FormatterRegistry registry) {
-        registry.addConverter(localDateConverter());
-        registry.addConverter(localDateTimeConverter());
-        registry.addConverter(localTimeConverter());
-    }
-
-    private Converter<String, LocalDate> localDateConverter() {
-        return new Converter<String, LocalDate>() {
+    @Bean
+    public void localDateConverter() {
+        formattingConversionService.addConverter(new Converter<String, LocalDate>() {
             @Override
             public LocalDate convert(String s) {
                 return LocalDate.parse(s, DateTimeFormatter.ofPattern(DEFAULT_DATE_FORMAT));
             }
-        };
+        });
     }
 
-    private Converter<String, LocalDateTime> localDateTimeConverter() {
-        return new Converter<String, LocalDateTime>() {
+    @Bean
+    public void localDateTimeConverter() {
+        formattingConversionService.addConverter(new Converter<String, LocalDateTime>() {
             @Override
             public LocalDateTime convert(String s) {
                 return LocalDateTime.parse(s, DateTimeFormatter.ofPattern(DEFAULT_DATE_TIME_FORMAT));
             }
-        };
+        });
     }
 
-    private Converter<String, LocalTime> localTimeConverter() {
-        return new Converter<String, LocalTime>() {
+    @Bean
+    public void localTimeConverter() {
+        formattingConversionService.addConverter(new Converter<String, LocalTime>() {
             @Override
             public LocalTime convert(String s) {
                 return LocalTime.parse(s, DateTimeFormatter.ofPattern(DEFAULT_TIME_FORMAT));
             }
-        };
+        });
     }
 
 
-    private ApiJsonParamResolver apiJsonParamResolver() {
-        if (apiJsonParamResolver != null) {
-            return apiJsonParamResolver;
-        }
-        if (adapter == null) {
-            adapter = requestMappingHandlerAdapter();
-        }
-        apiJsonParamResolver = new ApiJsonParamResolver(objectMapper(), adapter.getArgumentResolvers(), jsonFormat);
-        return apiJsonParamResolver;
-    }
 }
