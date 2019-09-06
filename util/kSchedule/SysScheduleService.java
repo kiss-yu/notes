@@ -24,13 +24,14 @@ import org.springframework.aop.aspectj.MethodInvocationProceedingJoinPoint;
 import org.springframework.aop.framework.ReflectiveMethodInvocation;
 import org.springframework.boot.context.event.ApplicationStartedEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor;
-import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 import org.springframework.scheduling.config.TaskManagementConfigUtils;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 import java.io.Serializable;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -109,6 +110,30 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
     /**
      * <p>
      * <h3>作者 keray</h3>
+     * <h3>时间： 2019/9/6 14:05</h3>
+     * 每天凌晨扫描任务
+     * 凌晨扫描的任务只获取等待提交的任务
+     * </p>
+     *
+     * @param
+     * @return <p> {@link} </p>
+     * @throws
+     */
+    @Scheduled(cron = "0 0 0 * * ?")
+    public void dayScanSchedule() {
+        List<SysScheduleModel> sysScheduleModels = selectList(
+                Wrappers.lambdaQuery(new SysScheduleModel())
+                        .eq(SysScheduleModel::getStatus, SysScheduleModel.WAIT_SUBMIT)
+        );
+        log.info("扫描的等待提交的任务：tasks={}", JSON.toJSON(sysScheduleModels));
+        sysScheduleModels.stream()
+                .parallel()
+                .forEach(this::dataScheduleSubmit);
+    }
+
+    /**
+     * <p>
+     * <h3>作者 keray</h3>
      * <h3>时间： 2019/9/6 10:41</h3>
      * 提交SysScheduleModel对象任务
      * </p>
@@ -144,9 +169,9 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
                             }
                             // 先基本类型转换
                             try {
-                                return Convert.convert(Class.forName(detail.get("clazz")),detail.get("value"));
-                            }catch (Exception e) {
-                                log.warn("value转换基本类型失败:value={},clazz={}",detail.get("value"),detail.get("value").getClass());
+                                return Convert.convert(Class.forName(detail.get("clazz")), detail.get("value"));
+                            } catch (Exception e) {
+                                log.warn("value转换基本类型失败:value={},clazz={}", detail.get("value"), detail.get("value").getClass());
                             }
                             return JSON.parseObject(detail.get("value"), Class.forName(detail.get("clazz")));
                         } catch (ClassNotFoundException e) {
@@ -174,6 +199,7 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
         }
         // 失败不做任何事，只有在分布式下被其他节点抢先提交了才会失败
     }
+
 
     @Pointcut("@annotation(com.caishi.v3.KSchedule)")
     public void setSysSchedule() {
@@ -299,17 +325,11 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
             updateScheduleStatus(id, SysScheduleModel.FAIL);
             return;
         }
-        long delay = 0;
-        if (StrUtil.isNotBlank(kz)) {
-            delay = LocalDateTime.now().until(KZEngine.computeTime(kz, startTime), ChronoUnit.MILLIS);
-            // 如果任务执行时间在一天后退出
-            if (delay > 24 * 60 * 60 * 1000) {
-                return;
-            }
-            if (delay < 0) {
-                log.warn("定义执行时间已超时，立即执行任务");
-                delay = 0;
-            }
+        long delay = computeDelay(startTime, kz, method, args);
+        // 如果任务执行时间在一天后退出
+        if (delay > 24 * 60 * 60 * 1000) {
+            log.info("任务延迟超过1天，暂时不提交任务，等待下次轮询提交 delay={}", delay);
+            return;
         }
         // 保存任务提交为wait_exec的定格数据，用于执行前的定格数据检查
         SysScheduleModel model = updateScheduleStatus(id, SysScheduleModel.WAIT_EXEC);
@@ -338,28 +358,72 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
                 scheduleExecFlag.remove();
             }
         };
+        // 动态时间
+
         // kz表达式任务提 & cron
         if (StrUtil.isNotBlank(kz) && StrUtil.isNotBlank(cron)) {
             // 提交kz 占时忽略cron
-            ScheduledFuture future = schedulingException.schedule(run, delay, TimeUnit.MILLISECONDS);
-            System.out.println("ScheduledFuture:" + future.isDone());
-//            scheduledAnnotationBeanPostProcessor.getScheduledTasks().add(scheduledTaskRegistrar.scheduleFixedDelayTask(new FixedDelayTask(() ->
-//                    // 提交cron
-//                    scheduledAnnotationBeanPostProcessor.getScheduledTasks().add(scheduledTaskRegistrar.scheduleCronTask(new CronTask(run, new CronTrigger(cron, TimeZone.getDefault()))))
-//                    , 0, delay)));
+            schedulingException.schedule(run, delay, TimeUnit.MILLISECONDS);
         }
         // 提交kz任务
         else if (StrUtil.isNotBlank(kz)) {
             schedulingException.schedule(run, delay, TimeUnit.MILLISECONDS);
-//            scheduledAnnotationBeanPostProcessor.getScheduledTasks().add(scheduledTaskRegistrar.scheduleFixedDelayTask(new FixedDelayTask(run, 0, delay)));
         }
         // cron 表达式任务提交到spring schedule
         else if (StrUtil.isNotBlank(cron)) {
             // 在KSchedule设定的延迟时间执行cron
-//            scheduledAnnotationBeanPostProcessor.getScheduledTasks().add(scheduledTaskRegistrar.scheduleCronTask(new CronTask(run, new CronTrigger(cron, TimeZone.getDefault()))));
             log.error("暂时不支持cron方式");
             throw new RuntimeException("no support");
         }
+    }
+
+    /**
+     * <p>
+     * <h3>作者 keray</h3>
+     * <h3>时间： 2019/9/6 15:27</h3>
+     * 计算任务延迟时间
+     * </p>
+     *
+     * @param startTime 创建开始时间
+     * @param kz
+     * @param method
+     * @param args
+     * @return <p> {@link long} </p>
+     * @throws
+     */
+    private long computeDelay(LocalDateTime startTime, String kz, Method method, Object[] args) {
+        long delay = 0;
+        // kz计算延迟
+        if (StrUtil.isNotBlank(kz)) {
+            delay = LocalDateTime.now().until(KZEngine.computeTime(kz, startTime), ChronoUnit.MILLIS);
+            if (delay < 0) {
+                log.warn("定义执行时间已超时，立即执行任务");
+                delay = 0;
+            }
+        }
+        // 传递的动态延迟 优先级高于kz
+        Annotation[][] annotations = method.getParameterAnnotations();
+        all:
+        for (int i = 0; annotations != null && i < annotations.length; i++) {
+            if (annotations[i] != null && annotations[i].length > 0) {
+                for (Annotation annotation : annotations[i]) {
+                    if (annotation.annotationType() == KScheduleDelay.class) {
+                        Object o = args[i];
+                        if (o == null) {
+                            log.warn("schedule执行传入的delay为null");
+                        } else if (o instanceof Integer || o instanceof Long) {
+                            delay = Long.parseLong(o.toString());
+                        } else if (o.getClass() == int.class || o.getClass() == long.class) {
+                            delay = (long) o;
+                        } else {
+                            log.warn("schedule执行传入的delay类型错误或者为null，仅支持 Integer,Long,int,long");
+                        }
+                        break all;
+                    }
+                }
+            }
+        }
+        return delay;
     }
 
 
@@ -380,7 +444,6 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
         // check 失败，表明在提交任务到这里这段时间任务被修改
         // 设置任务的定格状态
         LocalDateTime modifyTime = oldModel.getModifyTime();
-        System.out.println("modifyTime:" + modifyTime);
         // mysql不支持毫秒问题
         oldModel.setModifyTime(null);
         oldModel.setDriverId(driverId);
@@ -401,7 +464,6 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
         // 这里并发下会存在的问题，多机器间的并发ok，存在的问题在意单机同时在这里，无法根据driverId区分开来，这是依靠的是modifyTime，但是modifyTime的
         // 精度只能到秒级，也就是上诉的获取任务->提交任务->第一次check成功这个过程在另一个任务修改为exec的秒级相同会出现单机同时执行多个相同任务
         LocalDateTime modifyTime1 = oldModel.getModifyTime();
-        System.out.println("modifyTime1:" + modifyTime1);
         oldModel.setModifyTime(null);
         oldModel.setDriverId(driverId);
         if (sysScheduleMaper.selectOne(Wrappers.lambdaQuery(oldModel)

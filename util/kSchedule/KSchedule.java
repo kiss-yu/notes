@@ -12,6 +12,7 @@ import java.lang.annotation.*;
 public @interface KSchedule {
     String kz() default "";
 
+    @Deprecated
     String cron() default "";
 
     String beanName();
