@@ -20,6 +20,7 @@ import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Pointcut;
+import org.springframework.aop.SpringProxy;
 import org.springframework.aop.aspectj.MethodInvocationProceedingJoinPoint;
 import org.springframework.aop.framework.ReflectiveMethodInvocation;
 import org.springframework.boot.context.event.ApplicationStartedEvent;
@@ -186,8 +187,15 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
                     updateScheduleStatus(model.getId(), SysScheduleModel.FAIL);
                     return;
                 }
-                Method method = bean.getClass().getMethod(methodName, argsValue == null ? null :
-                        Stream.of(argsValue).map(Object::getClass).toArray(Class[]::new));
+                Method method = null;
+                // 如果是spring aop代理类 拿到真实对象的method
+                if (bean instanceof SpringProxy) {
+                    method = bean.getClass().getSuperclass().getMethod(methodName, argsValue == null ? null :
+                            Stream.of(argsValue).map(Object::getClass).toArray(Class[]::new));
+                } else {
+                    method = bean.getClass().getMethod(methodName, argsValue == null ? null :
+                            Stream.of(argsValue).map(Object::getClass).toArray(Class[]::new));
+                }
                 submit(model.getId(), model.getCreateTime(), 0, driverId,
                         kzCron.getString("kz"), kzCron.getString("cron"), model.getBeanName(), model.getRetryCount(),
                         method, argsValue
@@ -253,7 +261,7 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
             }
         }
         // 校验kz
-        if (!KZEngine.checkKZ(kSchedule.kz())) {
+        if (StrUtil.isNotBlank(kSchedule.kz()) && !KZEngine.checkKZ(kSchedule.kz())) {
             throw new IllegalStateException("kz表达式错误：kz" + kSchedule.kz());
         }
         // 校验cron
@@ -368,15 +376,15 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
             // 提交kz 占时忽略cron
             schedulingException.schedule(run, delay, TimeUnit.MILLISECONDS);
         }
-        // 提交kz任务
-        else if (StrUtil.isNotBlank(kz)) {
-            schedulingException.schedule(run, delay, TimeUnit.MILLISECONDS);
-        }
         // cron 表达式任务提交到spring schedule
         else if (StrUtil.isNotBlank(cron)) {
             // 在KSchedule设定的延迟时间执行cron
             log.error("暂时不支持cron方式");
             throw new RuntimeException("no support");
+        }
+        // 提交纯延迟任务
+        else {
+            schedulingException.schedule(run, delay, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -409,6 +417,7 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
                             return Long.parseLong(o.toString());
                         } else if (o instanceof String) {
                             kz = (String) o;
+                            break all;
                         } else {
                             log.warn("schedule执行传入的delay类型错误或者为null，仅支持 Integer,Long,int,long,String");
                         }
