@@ -326,6 +326,10 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
             return;
         }
         long delay = computeDelay(startTime, kz, method, args);
+        if (delay < 0) {
+            log.warn("定义执行时间已超时，立即执行任务");
+            delay = 0;
+        }
         // 如果任务执行时间在一天后退出
         if (delay > 24 * 60 * 60 * 1000) {
             log.info("任务延迟超过1天，暂时不提交任务，等待下次轮询提交 delay={}", delay);
@@ -392,15 +396,6 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
      * @throws
      */
     private long computeDelay(LocalDateTime startTime, String kz, Method method, Object[] args) {
-        long delay = 0;
-        // kz计算延迟
-        if (StrUtil.isNotBlank(kz)) {
-            delay = LocalDateTime.now().until(KZEngine.computeTime(kz, startTime), ChronoUnit.MILLIS);
-            if (delay < 0) {
-                log.warn("定义执行时间已超时，立即执行任务");
-                delay = 0;
-            }
-        }
         // 传递的动态延迟 优先级高于kz
         Annotation[][] annotations = method.getParameterAnnotations();
         all:
@@ -412,18 +407,27 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
                         if (o == null) {
                             log.warn("schedule执行传入的delay为null");
                         } else if (o instanceof Integer || o instanceof Long) {
-                            delay = Long.parseLong(o.toString());
-                        } else if (o.getClass() == int.class || o.getClass() == long.class) {
-                            delay = (long) o;
+                            return Long.parseLong(o.toString());
+                        } else if (o instanceof String) {
+                            kz = (String) o;
                         } else {
-                            log.warn("schedule执行传入的delay类型错误或者为null，仅支持 Integer,Long,int,long");
+                            log.warn("schedule执行传入的delay类型错误或者为null，仅支持 Integer,Long,int,long,String");
                         }
                         break all;
                     }
                 }
             }
         }
-        return delay;
+        // 校验kz
+        if (!KZEngine.checkKZ(kz)) {
+            throw new IllegalStateException("kz表达式错误：kz" + kz);
+        }
+
+        // kz计算延迟
+        if (StrUtil.isNotBlank(kz)) {
+            return LocalDateTime.now().until(KZEngine.computeTime(kz, startTime), ChronoUnit.MILLIS);
+        }
+        return 0;
     }
 
 
@@ -462,7 +466,7 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
         // 再一次check避免的情况是第一次check成功为改为exec状态时期间，另外一台机器直接执行了获取任务->提交任务->第一次check成功这个过程，如果不加第二次check就会多台机器执行，
         // 第二次check会使得多台机器最终只有一个定格数据，保证任务的单台执行
         // 这里并发下会存在的问题，多机器间的并发ok，存在的问题在意单机同时在这里，无法根据driverId区分开来，这是依靠的是modifyTime，但是modifyTime的
-        // 精度只能到秒级，也就是上诉的获取任务->提交任务->第一次check成功这个过程在另一个任务修改为exec的秒级相同会出现单机同时执行多个相同任务
+        // 精度只能到毫秒级，也就是上诉的获取任务->提交任务->第一次check成功这个过程在另一个任务修改为exec的毫秒级相同会出现单机同时执行多个相同任务
         LocalDateTime modifyTime1 = oldModel.getModifyTime();
         oldModel.setModifyTime(null);
         oldModel.setDriverId(driverId);
