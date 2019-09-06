@@ -72,6 +72,7 @@ public class KZEngine {
     private static LocalDateTime computeA(String aEs, LocalDateTime date) {
         // 计算模式 false 减法 true 加法
         boolean state = !aEs.startsWith("-");
+        aEs = aEs.substring(aEs.startsWith("-") || aEs.startsWith("+") ? 1 : 0);
         Integer value = Integer.valueOf(aEs.substring(1));
         switch (aEs.charAt(0)) {
             case 'y': {
@@ -101,6 +102,6 @@ public class KZEngine {
     }
 
     public static void main(String[] args) {
-        System.out.println(checkKZ("+y1 -M2"));
+        System.out.println(computeTime("+y1 -M2", LocalDateTime.now()));
     }
 }
