@@ -41,7 +41,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -241,8 +240,8 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
      * @throws
      */
     private boolean saveSchedule(KSchedule kSchedule, Method method, Object[] args) {
-        // 没有kz和cron表达式的任务直接直接执行
-        if (StrUtil.isBlank(kSchedule.kz()) && StrUtil.isBlank(kSchedule.cron())) {
+        // 没有kz和cron表达式的任务直接直接执行 并且关闭了动态延迟
+        if (StrUtil.isBlank(kSchedule.kz()) && StrUtil.isBlank(kSchedule.cron()) && !kSchedule.dynamicDelay()) {
             return true;
         }
         // 校验参数是否全部实现Serialization接口
