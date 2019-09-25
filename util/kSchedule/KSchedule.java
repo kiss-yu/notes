@@ -25,6 +25,8 @@ public @interface KSchedule {
 
     int maxRetry() default 0;
 
+    int retryMillis() default 1000;
+
     // 设置值动态 dynamicDelay
     boolean dynamicDelay() default false;
 }

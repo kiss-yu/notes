@@ -39,6 +39,7 @@ import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
@@ -51,8 +52,8 @@ import java.util.stream.Stream;
  * @author by keray
  * date:2019/9/5 16:43
  */
-@Service(value = "sysScheduleService")
 @Aspect
+@Service(value = "sysScheduleService")
 @Slf4j
 public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
     private final ThreadLocal<Boolean> scheduleExecFlag = new ThreadLocal<>();
@@ -111,7 +112,7 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
      * <p>
      * <h3>作者 keray</h3>
      * <h3>时间： 2019/9/6 14:05</h3>
-     * 每天凌晨扫描任务
+     * 每天凌晨2点扫描任务
      * 凌晨扫描的任务只获取等待提交的任务
      * </p>
      *
@@ -119,7 +120,7 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
      * @return <p> {@link} </p>
      * @throws
      */
-    @Scheduled(cron = "0 0 0 * * ?")
+    @Scheduled(cron = "0 0 2 * * ? ")
     public void dayScanSchedule() {
         List<SysScheduleModel> sysScheduleModels = selectList(
                 Wrappers.lambdaQuery(new SysScheduleModel())
@@ -197,7 +198,7 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
                             Stream.of(argsValue).map(Object::getClass).toArray(Class[]::new));
                 }
                 submit(model.getId(), model.getCreateTime(), 0, driverId,
-                        kzCron.getString("kz"), kzCron.getString("cron"), model.getBeanName(), model.getRetryCount(),
+                        kzCron.getString("kz"), kzCron.getString("cron"), model.getBeanName(), model.getRetryCount(), model.getRetryMillis(),
                         method, argsValue
                 );
             } catch (Exception e) {
@@ -221,6 +222,9 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
             ReflectiveMethodInvocation j = (ReflectiveMethodInvocation) proxy.get(methodPoint);
             Method method = j.getMethod();
             KSchedule kSchedule = method.getAnnotation(KSchedule.class);
+
+            System.out.println("pjp.getArgs():" + Arrays.toString(pjp.getArgs()));
+
             // 检查任务是否可直接执行 可执行直接返回
             if (scheduleExecFlag.get() != null && scheduleExecFlag.get()) {
                 return pjp.proceed();
@@ -248,6 +252,7 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
      * @throws
      */
     private boolean saveSchedule(KSchedule kSchedule, Method method, Object[] args) {
+        LocalDateTime submitNow = LocalDateTime.now();
         // 没有kz和cron表达式的任务直接直接执行 并且关闭了动态延迟
         if (StrUtil.isBlank(kSchedule.kz()) && StrUtil.isBlank(kSchedule.cron()) && !kSchedule.dynamicDelay()) {
             return true;
@@ -273,6 +278,7 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
                 .beanName(kSchedule.beanName())
                 .retryCount(kSchedule.maxRetry())
                 .status(SysScheduleModel.WAIT_SUBMIT)
+                .retryMillis(kSchedule.retryMillis())
                 .driverId(driverId)
                 .kzCron(JSON.toJSONString(
                         MapUtil.builder()
@@ -294,8 +300,8 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
                 .build();
         insert(sysScheduleModel);
         // 提交任务
-        submit(sysScheduleModel.getId(), LocalDateTime.now(), 0, driverId,
-                kSchedule.kz(), kSchedule.cron(), kSchedule.beanName(), kSchedule.maxRetry(),
+        submit(sysScheduleModel.getId(), submitNow, 0, driverId,
+                kSchedule.kz(), kSchedule.cron(), kSchedule.beanName(), kSchedule.maxRetry(), kSchedule.retryMillis(),
                 method, args
         );
         return false;
@@ -318,10 +324,10 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
      * @param args      方法参数
      */
     private void submit(String id, LocalDateTime startTime, int retryCount, String driverId,
-                        String kz, String cron, String beanName, int retryMaxCount,
+                        String kz, String cron, String beanName, int retryMaxCount, int retryMS,
                         Method method, Object[] args) {
-        log.info("提交任务:id={},startTime={},retryCount={},driverId={},kz={},cron={},beanName={},retryMaxCount={},method={},args={}",
-                id, startTime, retryCount, driverId, kz, cron, beanName, retryMaxCount, method, args
+        log.info("提交任务:id={},startTime={},retryCount={},driverId={},kz={},cron={},beanName={},retryMaxCount={},retryMS={},method={},args={}",
+                id, startTime, retryCount, driverId, kz, cron, beanName, retryMaxCount, retryMS, method, args
         );
         if (StrUtil.isNotBlank(cron) && StrUtil.isBlank(kz)) {
             log.error("暂时不支持cron方式");
@@ -361,7 +367,7 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
                 log.error("任务执行异常", e);
                 if (retryMaxCount > 0) {
                     updateScheduleStatus(id, SysScheduleModel.WAIT_RETRY);
-                    submit(id, startTime, retryMaxCount, driverId, kz, cron, beanName, retryCount + 1, method, args);
+                    submit(id, startTime.minus(-retryMS, ChronoUnit.MILLIS), retryMaxCount, driverId, kz, cron, beanName, retryCount + 1, retryMS, method, args);
                 } else {
                     updateScheduleStatus(id, SysScheduleModel.FAIL);
                 }
@@ -491,7 +497,14 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
             updateScheduleStatus(id, SysScheduleModel.FAIL);
             return false;
         }
-        method.invoke(execObj, args);
+        Object result = method.invoke(execObj, args);
+        if (result instanceof Boolean) {
+            return (boolean) result;
+        }
         return true;
+    }
+
+    public static void main(String[] args) {
+
     }
 }

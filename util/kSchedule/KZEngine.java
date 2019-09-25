@@ -1,7 +1,9 @@
 package com.caishi.util;
 
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalField;
 
 /**
  * @author by keray
@@ -56,6 +58,65 @@ public class KZEngine {
         return date;
     }
 
+    /**
+     * <p>
+     * <h3>作者 keray</h3>
+     * <h3>时间： 2019/9/10 17:10</h3>
+     * 将时间差转换为kz表达式
+     * </p>
+     *
+     * @param start
+     * @param end
+     * @return <p> {@link String} </p>
+     * @throws
+     */
+    public static String generateKz(LocalDateTime start, LocalDateTime end) {
+        StringBuilder builder = new StringBuilder();
+        if (start.getYear() > end.getYear()) {
+            builder.append(String.format("-y%d", start.getYear() - end.getYear()));
+        } else {
+            builder.append(String.format("+y%d", end.getYear() - start.getYear()));
+        }
+        int k = start.getMonthValue() - end.getMonthValue();
+        if (k > 0) {
+            builder.append(String.format(" -M%d", k));
+        } else if (k < 0) {
+            builder.append(String.format(" +M%d", -k));
+        }
+        k = start.getDayOfMonth() - end.getDayOfMonth();
+        if (k > 0) {
+            builder.append(String.format(" -d%d", k));
+        } else if (k < 0) {
+            builder.append(String.format(" +d%d", -k));
+        }
+        k = start.getHour() - end.getHour();
+        if (k > 0) {
+            builder.append(String.format(" -H%d", k));
+        } else if (k < 0) {
+            builder.append(String.format(" +H%d", -k));
+        }
+        k = start.getMinute() - end.getMinute();
+        if (k > 0) {
+            builder.append(String.format(" -m%d", k));
+        } else if (k < 0) {
+            builder.append(String.format(" +m%d", -k));
+        }
+        k = start.getSecond() - end.getSecond();
+        if (k > 0) {
+            builder.append(String.format(" -s%d", k));
+        } else if (k < 0) {
+            builder.append(String.format(" +s%d", -k));
+        }
+        k = start.get(ChronoField.MILLI_OF_SECOND) - end.get(ChronoField.MILLI_OF_SECOND);
+        if (k > 0) {
+            builder.append(String.format(" -S%d", k));
+        } else if (k < 0) {
+            builder.append(String.format(" +S%d", -k));
+        }
+
+        return builder.toString();
+    }
+
     private static String[] es(String expression) {
         String[] esA = expression.split(":");
         String[] esB = expression.split(" ");
@@ -94,7 +155,7 @@ public class KZEngine {
                 return date.minusSeconds(state ? -value : value);
             }
             case 'S': {
-                return date.minus(state ? -value : value, ChronoUnit.MILLENNIA);
+                return date.minus(state ? -value : value, ChronoUnit.MILLIS);
             }
             default:
                 return date;
@@ -102,6 +163,12 @@ public class KZEngine {
     }
 
     public static void main(String[] args) {
-        System.out.println(computeTime("+y1 -M2", LocalDateTime.now()));
+        System.out.println(computeTime("+y0 +m2 -s25 -S262", LocalDateTime.now()));
+//        int a = 1;
+//        Object b = a;
+//        System.out.println(((Object) a).getClass());
+        LocalDateTime a = LocalDateTime.parse("2019-08-08 00:00:00", TimeUtil.DATE_TIME_FORMATTER_SC);
+        LocalDateTime b = LocalDateTime.parse("2019-07-10 00:00:00", TimeUtil.DATE_TIME_FORMATTER_SC);
+        System.out.println(generateKz(a, b));
     }
 }
