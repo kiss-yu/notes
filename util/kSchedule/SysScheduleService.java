@@ -223,8 +223,6 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
             Method method = j.getMethod();
             KSchedule kSchedule = method.getAnnotation(KSchedule.class);
 
-            System.out.println("pjp.getArgs():" + Arrays.toString(pjp.getArgs()));
-
             // 检查任务是否可直接执行 可执行直接返回
             if (scheduleExecFlag.get() != null && scheduleExecFlag.get()) {
                 return pjp.proceed();
@@ -362,6 +360,14 @@ public class SysScheduleService extends BaseServiceImpl<SysScheduleModel> {
                 scheduleExecFlag.set(true);
                 if (exec(id, beanName, method, args, model)) {
                     updateScheduleStatus(id, SysScheduleModel.SUCCESS);
+                } else {
+                    log.info("任务返回false，重试");
+                    if (retryMaxCount > 0) {
+                        updateScheduleStatus(id, SysScheduleModel.WAIT_RETRY);
+                        submit(id, startTime.minus(-retryMS, ChronoUnit.MILLIS), retryMaxCount, driverId, kz, cron, beanName, retryCount + 1, retryMS, method, args);
+                    } else {
+                        updateScheduleStatus(id, SysScheduleModel.FAIL);
+                    }
                 }
             } catch (Exception e) {
                 log.error("任务执行异常", e);
