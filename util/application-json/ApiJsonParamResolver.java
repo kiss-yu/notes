@@ -20,15 +20,13 @@ import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.ModelAndView;
 import org.springframework.web.servlet.mvc.method.annotation.RequestResponseBodyMethodProcessor;
 
-import java.io.IOException;
-
 import javax.servlet.ReadListener;
 import javax.servlet.ServletInputStream;
-
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletRequestWrapper;
 import javax.servlet.http.HttpServletResponse;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -93,7 +91,8 @@ public class ApiJsonParamResolver extends RequestResponseBodyMethodProcessor imp
         HttpServletRequest httpServletRequest = webRequest.getNativeRequest(HttpServletRequest.class);
         // 仅当content-type为app/json时 处理 其他情况走原有的处理
         all:
-        if (httpServletRequest != null && MediaType.APPLICATION_JSON_VALUE.equals(httpServletRequest.getContentType())) {
+        if (httpServletRequest != null && httpServletRequest.getContentType() != null &&
+                httpServletRequest.getContentType().contains(MediaType.APPLICATION_JSON_VALUE)) {
             if (cache.get() == null) {
                 MethodParameter mapParam = new MethodParameter(parameter) {
                     // 重写为了将body的json字符串转换为map对象
@@ -121,9 +120,17 @@ public class ApiJsonParamResolver extends RequestResponseBodyMethodProcessor imp
                     else if (entry.getValue() instanceof List) {
                         paramMap.put(entry.getKey(), ((List<Object>) entry.getValue())
                                 .stream()
-                                .map(s -> s == null ? null : s.toString()).toArray(String[]::new));
+                                .map(s -> {
+                                    if (s == null) {
+                                        return null;
+                                    }
+                                    if (ClassUtil.isSimpleValueType(s.getClass())) {
+                                        return s.toString();
+                                    }
+                                    return JSON.toJSONString(s);
+                                }).toArray(String[]::new));
                     }
-                    // 处理对象类型
+                    // 处理对象类型 数组类型
                     else if (entry.getValue() instanceof Map) {
                         // 将map转换为json放到[0]
                         paramMap.put(entry.getKey(), new String[]{JSON.toJSONString(entry.getValue())});
@@ -133,7 +140,8 @@ public class ApiJsonParamResolver extends RequestResponseBodyMethodProcessor imp
                 }
                 // 保留一份原始的json
                 paramMap.put(ROOT_JSON_KEY, new String[]{JSON.toJSONString(data)});
-                ServletWebRequest servletWebRequest = new ServletWebRequest(new IHttpServletRequest(httpServletRequest));
+                ServletWebRequest servletWebRequest = new ServletWebRequest(new IHttpServletRequest(httpServletRequest),
+                        (HttpServletResponse) webRequest.getNativeResponse());
                 servletWebRequest.getParameterMap().putAll(paramMap);
                 cache.set(servletWebRequest);
             }
@@ -149,7 +157,18 @@ public class ApiJsonParamResolver extends RequestResponseBodyMethodProcessor imp
                 }
                 // 二级ModelAttribute（最多只能出现两级），在上面放到ParameterMap的json字符串拿出
                 else {
-                    attributeJson = webRequest.getParameter(attribute.value());
+                    //
+                    if (Collection.class.isAssignableFrom(parameter.getParameterType())) {
+                        String[] value = webRequest.getParameterValues(attribute.value());
+                        if (value == null) {
+                            attributeJson = "[]";
+                        } else {
+                            attributeJson = StrUtil.format("[{}]",
+                                    String.join(",", value));
+                        }
+                    } else {
+                        attributeJson = webRequest.getParameter(attribute.value());
+                    }
                 }
                 // 拿到自定义的HttpServletRequest
                 IHttpServletRequest iHttpServletRequest = (IHttpServletRequest) webRequest.getNativeRequest();
@@ -174,7 +193,10 @@ public class ApiJsonParamResolver extends RequestResponseBodyMethodProcessor imp
         HandlerMethodArgumentResolver result = this.argumentResolverCache.get(parameter);
         if (result == null) {
             for (HandlerMethodArgumentResolver methodArgumentResolver : this.argumentResolvers) {
-                if (methodArgumentResolver.supportsParameter(parameter) && !(methodArgumentResolver instanceof ApiJsonParamResolver)) {
+                if (!(methodArgumentResolver instanceof ApiJsonParamResolver) &&
+                        !(methodArgumentResolver instanceof BaseEntityFieldClearParamResolver) &&
+                        methodArgumentResolver.supportsParameter(parameter)
+                ) {
                     result = methodArgumentResolver;
                     this.argumentResolverCache.put(parameter, result);
                     break;
